@@ -4,7 +4,7 @@ from pipeline.ingestion import (
     load_or_create_vectorstore,
 )
 from pipeline.retrieval import BM25Index, hybrid_retrieval
-from pipeline.query import understand_query, improve_query
+from pipeline.query import understand_query, improve_query, check_retrieval_needed
 from pipeline.verification import verify_evidence, EvidenceVerification
 from pipeline.generation import generate_answer, format_sources, AnswerOutput
 from pipeline.web_search import tavily_search
@@ -18,6 +18,7 @@ __all__ = [
     "hybrid_retrieval",
     "understand_query",
     "improve_query",
+    "check_retrieval_needed",
     "verify_evidence",
     "EvidenceVerification",
     "generate_answer",

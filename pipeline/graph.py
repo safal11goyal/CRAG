@@ -1,19 +1,23 @@
-from typing import TypedDict, List
+import operator
+from typing import TypedDict, List, Annotated, Sequence, Optional
 from langgraph.graph import StateGraph, START, END
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from pipeline.retrieval import BM25Index, hybrid_retrieval
-from pipeline.query import understand_query, improve_query
+from pipeline.query import understand_query, improve_query, check_retrieval_needed, _extract_text
 from pipeline.verification import verify_evidence
 from pipeline.generation import generate_answer, format_sources
 from pipeline.web_search import tavily_search
 import config
 
 
-class RAGState(TypedDict):
+class RAGState(TypedDict, total=False):
+    messages: Annotated[List[BaseMessage], operator.add]
     question: str
     search_query: str
+    needs_retrieval: bool
     documents: List[Document]
     enough_evidence: bool
     verification_reason: str
@@ -33,8 +37,57 @@ def build_rag_graph(
 ):
     """Build and compile the Corrective/Adaptive RAG LangGraph workflow with Tavily fallback."""
 
+    def check_retrieval_needed_node(state: RAGState) -> dict:
+        needs_retrieval = check_retrieval_needed(
+            state["question"],
+            llm,
+            chat_history=state.get("messages", []),
+        )
+        return {"needs_retrieval": needs_retrieval}
+
+    def direct_chat_node(state: RAGState) -> dict:
+        history = state.get("messages", [])
+        prompt_messages = [
+            SystemMessage(
+                content=(
+                    "You are a friendly, helpful AI RAG assistant with access to a document knowledge base.\n"
+                    "Respond warmly, helpfully, and conversationally.\n"
+                    "You have access to the conversation history. If the user asks about details mentioned earlier in the chat (such as their name, previous questions, or personal remarks), answer accurately and directly using that context.\n"
+                    "Keep conversational responses natural and concise. Remind them they can also ask questions about the loaded documents."
+                )
+            ),
+        ]
+        if history:
+            prompt_messages.extend(history)
+        else:
+            prompt_messages.append(HumanMessage(content=state["question"]))
+
+        try:
+            response = llm.invoke(prompt_messages)
+            answer = _extract_text(response.content)
+        except Exception:
+            answer = "Hello! How can I help you today? Feel free to ask me anything based on your documents."
+
+        return {
+            "messages": [AIMessage(content=answer)],
+            "answer": answer,
+            "confidence": 1.0,
+            "warning": "Conversational response — no document retrieval needed.",
+            "sources": [],
+            "enough_evidence": True,
+        }
+
+    def decide_retrieval_route(state: RAGState) -> str:
+        if state.get("needs_retrieval", True):
+            return "understand_query"
+        return "direct_chat"
+
     def understand_query_node(state: RAGState) -> dict:
-        query = understand_query(state["question"], llm)
+        query = understand_query(
+            state["question"],
+            llm,
+            chat_history=state.get("messages", []),
+        )
         return {
             "search_query": query,
             "iterations": state.get("iterations", 0),
@@ -86,6 +139,7 @@ def build_rag_graph(
             warning = "Notice — answer was retrieved via Tavily Web Search fallback because local documents lacked sufficient coverage."
 
         return {
+            "messages": [AIMessage(content=output.answer)],
             "answer": output.answer,
             "confidence": output.confidence,
             "warning": warning,
@@ -95,8 +149,10 @@ def build_rag_graph(
     def handle_insufficient_evidence_node(state: RAGState) -> dict:
         docs = state.get("documents", [])
         sources = format_sources(docs) if docs else []
+        ans = "I could not find sufficient evidence in the provided documents or web search to answer this question reliably."
         return {
-            "answer": "I could not find sufficient evidence in the provided documents or web search to answer this question reliably.",
+            "messages": [AIMessage(content=ans)],
+            "answer": ans,
             "confidence": 0.1,
             "warning": "High risk — insufficient supporting evidence was found after maximum retrieval attempts and web search.",
             "sources": sources,
@@ -117,6 +173,8 @@ def build_rag_graph(
 
     workflow = StateGraph(RAGState)
 
+    workflow.add_node("check_retrieval_needed", check_retrieval_needed_node)
+    workflow.add_node("direct_chat", direct_chat_node)
     workflow.add_node("understand_query", understand_query_node)
     workflow.add_node("retrieve", retrieve_node)
     workflow.add_node("verify_evidence", verify_evidence_node)
@@ -125,7 +183,17 @@ def build_rag_graph(
     workflow.add_node("generate_answer", generate_answer_node)
     workflow.add_node("handle_insufficient_evidence", handle_insufficient_evidence_node)
 
-    workflow.add_edge(START, "understand_query")
+    workflow.add_edge(START, "check_retrieval_needed")
+    workflow.add_conditional_edges(
+        "check_retrieval_needed",
+        decide_retrieval_route,
+        {
+            "understand_query": "understand_query",
+            "direct_chat": "direct_chat",
+        },
+    )
+
+    workflow.add_edge("direct_chat", END)
     workflow.add_edge("understand_query", "retrieve")
     workflow.add_edge("retrieve", "verify_evidence")
 
