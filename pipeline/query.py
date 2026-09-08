@@ -4,7 +4,12 @@ from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 
 
 def _extract_text(content) -> str:
-    """Extract plain text from LLM response content."""
+    """Extract plain text from LLM response content.
+
+    langchain-google-genai with Gemini can return content as a list of
+    content blocks (e.g. [{"type": "text", "text": "..."}]) rather than
+    a plain str. This helper normalizes both cases.
+    """
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, list):

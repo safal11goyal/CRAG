@@ -61,14 +61,7 @@ def verify_evidence(
 
     try:
         result = structured_llm.invoke(messages)
-        if isinstance(result, EvidenceVerification):
-            return result
-        if isinstance(result, dict):
-            return EvidenceVerification(**result)
-        return EvidenceVerification(
-            enough_evidence=False,
-            reason="Structured output could not be parsed.",
-        )
+        return result
     except Exception as e:
         return EvidenceVerification(
             enough_evidence=False,

@@ -1,12 +1,39 @@
 import os
 import time
 from typing import List, Tuple
-from pypdf import PdfReader
-from docx import Document as DocxReader
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Return True if the exception is a transient API rate-limit error."""
+    msg = str(exc).lower()
+    return any(
+        k in msg
+        for k in ("429", "rate limit", "too many requests", "resource_exhausted", "trial token")
+    )
+
+
+@retry(
+    retry=retry_if_exception(_is_rate_limit_error),
+    stop=stop_after_attempt(8),
+    wait=wait_exponential(multiplier=10, min=10, max=80),
+    before_sleep=lambda rs: print(
+        f"[WARN] Rate limit reached. Waiting before retrying batch (attempt {rs.attempt_number}/8)...",
+        flush=True,
+    ),
+    reraise=True,
+)
+def _embed_batch(vectorstore, batch: List[Document], embeddings: Embeddings):
+    """Embed a single batch of document chunks, retrying on rate-limit errors."""
+    if vectorstore is None:
+        return FAISS.from_documents(batch, embeddings)
+    vectorstore.add_documents(batch)
+    return vectorstore
 
 
 def load_documents(documents_dir: str) -> List[Document]:
@@ -26,47 +53,37 @@ def load_documents(documents_dir: str) -> List[Document]:
 
         if ext == "pdf":
             try:
-                reader = PdfReader(filepath)
-                for page_idx, page in enumerate(reader.pages):
-                    text = page.extract_text()
-                    if text and text.strip():
-                        documents.append(
-                            Document(
-                                page_content=text,
-                                metadata={
-                                    "source": filename,
-                                    "page": page_idx + 1,  # 1-indexed
-                                },
-                            )
-                        )
+                loader = PyPDFLoader(filepath)
+                docs = loader.load()
+                for doc in docs:
+                    doc.metadata["source"] = filename
+                    # PyPDFLoader uses 0-based page index; normalize to 1-based to match prior behavior
+                    if "page" in doc.metadata:
+                        doc.metadata["page"] = doc.metadata["page"] + 1
+                    if doc.page_content.strip():
+                        documents.append(doc)
             except Exception as e:
                 print(f"[WARN] Failed to load PDF {filename}: {e}", flush=True)
 
         elif ext == "txt":
             try:
-                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                    text = f.read()
-                if text.strip():
-                    documents.append(
-                        Document(
-                            page_content=text,
-                            metadata={"source": filename},
-                        )
-                    )
+                loader = TextLoader(filepath, encoding="utf-8", autodetect_encoding=True)
+                docs = loader.load()
+                for doc in docs:
+                    doc.metadata["source"] = filename
+                    if doc.page_content.strip():
+                        documents.append(doc)
             except Exception as e:
                 print(f"[WARN] Failed to load TXT {filename}: {e}", flush=True)
 
         elif ext == "docx":
             try:
-                doc = DocxReader(filepath)
-                text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-                if text.strip():
-                    documents.append(
-                        Document(
-                            page_content=text,
-                            metadata={"source": filename},
-                        )
-                    )
+                loader = Docx2txtLoader(filepath)
+                docs = loader.load()
+                for doc in docs:
+                    doc.metadata["source"] = filename
+                    if doc.page_content.strip():
+                        documents.append(doc)
             except Exception as e:
                 print(f"[WARN] Failed to load DOCX {filename}: {e}", flush=True)
 
@@ -118,22 +135,7 @@ def load_or_create_vectorstore(
     for idx, i in enumerate(range(0, len(chunks), batch_size), start=1):
         batch = chunks[i : i + batch_size]
         print(f"[INFO] Embedding batch {idx}/{total_batches} ({len(batch)} chunks)...", flush=True)
-
-        for attempt in range(8):
-            try:
-                if vectorstore is None:
-                    vectorstore = FAISS.from_documents(batch, embeddings)
-                else:
-                    vectorstore.add_documents(batch)
-                break
-            except Exception as e:
-                err_msg = str(e).lower()
-                if "429" in err_msg or "rate limit" in err_msg or "too many requests" in err_msg or "resource_exhausted" in err_msg or "trial token" in err_msg:
-                    wait_time = (attempt + 1) * 10
-                    print(f"[WARN] Rate limit reached. Waiting {wait_time}s before retrying batch {idx}/{total_batches} (attempt {attempt + 1}/8)...", flush=True)
-                    time.sleep(wait_time)
-                else:
-                    raise e
+        vectorstore = _embed_batch(vectorstore, batch, embeddings)
 
         # Courtesy pause between batches to stay under Cohere's 100k TPM trial limit
         time.sleep(3)

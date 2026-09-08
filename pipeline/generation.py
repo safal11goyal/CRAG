@@ -80,22 +80,10 @@ def generate_answer(
 
     try:
         result = structured_llm.invoke(messages)
-        if isinstance(result, AnswerOutput):
-            result.confidence = max(0.0, min(1.0, float(result.confidence)))
-            if not result.warning or not result.warning.strip():
-                result.warning = "Low risk — answer is directly supported by retrieved documents."
-            return result
-        if isinstance(result, dict):
-            return AnswerOutput(
-                answer=result.get("answer", ""),
-                confidence=max(0.0, min(1.0, float(result.get("confidence", 0.85)))),
-                warning=result.get("warning") or "Low risk — answer is supported by retrieved documents.",
-            )
-        return AnswerOutput(
-            answer="Unable to parse structured response.",
-            confidence=0.0,
-            warning="High risk — answer could not be parsed.",
-        )
+        result.confidence = max(0.0, min(1.0, float(result.confidence)))
+        if not result.warning or not result.warning.strip():
+            result.warning = "Low risk — answer is directly supported by retrieved documents."
+        return result
     except Exception as e:
         return AnswerOutput(
             answer=f"Error generating answer: {e}",
