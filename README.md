@@ -54,22 +54,48 @@ The LangGraph state machine orchestrates the query understanding, hybrid retriev
 
 ```mermaid
 flowchart TD
-    START([User Query]) --> UQ[Query Understanding & Rewriting]
-    UQ --> RET[Hybrid Retrieval\nFAISS Dense + BM25 Sparse]
-    RET --> VER[Evidence Verification\nConservative LLM Judge]
-    VER --> DEC{Enough\nEvidence?}
-    DEC -- "YES" --> GEN[Grounded Answer Generation\nStrict Context Attribution]
-    GEN --> DB[(PostgreSQL Log\nSession & Turn Telemetry)]
-    DB --> END([Final Answer + Citations + Confidence])
-    
-    DEC -- "NO (iter < MAX)" --> IMP[Query Refinement\nKeyword & Synonym Expansion]
-    IMP --> RET
-    
-    DEC -- "NO (iter >= MAX)" --> WEB[Tavily Web Search Fallback]
-    WEB --> DEC_WEB{Web Evidence\nFound?}
-    DEC_WEB -- "YES" --> GEN
-    DEC_WEB -- "NO" --> FAIL[Safe Fallback Termination\nGraceful Failure Notice]
-    FAIL --> DB
+     subgraph STARTUP["🚀 Startup & Ingestion"]
+        A([Start]) --> B[Load .env / config.py]
+        B --> C[Init PostgreSQL\ndatabase.init_db]
+        C --> D[Init CohereEmbeddings\n+ ChatGoogleGenerativeAI LLM]
+        D --> E{FAISS index\nexists on disk?}
+        E -- Yes --> F[FAISS.load_local]
+        E -- No --> G[Load Documents\nPyPDFLoader / TextLoader\nDocx2txtLoader]
+        G --> H[RecursiveCharacterTextSplitter\nchunk_size=1000, overlap=200]
+        H --> I[CohereEmbeddings\nbatch embed with tenacity retry]
+        I --> J[FAISS.save_local]
+        F --> K[Build BM25Index\nfrom chunks]
+        J --> K
+        K --> L[build_rag_graph\ncompile LangGraph]
+        L --> M([System Ready])
+    end
+    subgraph GRAPH["⚡ CRAG LangGraph Runtime — Per Query"]
+        N([User Question]) --> O[check_retrieval_needed]
+        O --> P{Fast-path\ngreeting check}
+        P -- Greeting/Conversational --> Q[direct_chat_node\nLLM with history]
+        Q --> R([Answer + END])
+        P -- Needs checking --> S[LLM: YES or NO?]
+        S -- NO --> Q
+        S -- YES --> T[understand_query\nLLM → search_query]
+        T --> U[hybrid_retrieval\nFAISS similarity_search\n+ BM25Okapi.get_scores\n→ deduplicated docs]
+        U --> V[verify_evidence\nLLM with_structured_output\n→ EvidenceVerification]
+        V --> W{enough_evidence?}
+        W -- True --> X[generate_answer\nLLM with_structured_output\n→ AnswerOutput]
+        X --> Y[format_sources\ndeduplicate citations]
+        Y --> Z([Answer + Sources + Confidence + END])
+        W -- False\niterations < max_iterations --> AA[improve_query\nLLM → refined_query]
+        AA --> U
+        W -- False\niterations >= max_iterations --> AB[web_search\nTavilyClient.search]
+        AB --> AC{Web results\nfound?}
+        AC -- Yes --> X
+        AC -- No --> AD[handle_insufficient_evidence\nlow-confidence fallback]
+        AD --> Z
+    end
+    M --> N
+    subgraph PERSIST["💾 Persistence — After Every Turn"]
+        Z --> AE[database.save_conversation_turn\nPostgreSQL via SQLAlchemy]
+        R --> AE
+    end
 ```
 
 ---
