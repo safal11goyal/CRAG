@@ -1,19 +1,9 @@
-# Environment variables (CRITICAL: Do NOT commit secrets)
-.env
-.env.*
-!.env.example
-.streamlit/secrets.toml
-
-# Vector databases & indexes
-vectorstore/
-*.faiss
-*.pkl
-
-# Python artifacts
+﻿# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyd
 .Python
 build/
 develop-eggs/
@@ -27,22 +17,79 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual environments
+# ── Virtual Environments ─────────────────────────────────────────────────────
 venv/
-.venv/
 env/
 ENV/
+.venv/
+.env.venv/
 
-# IDE settings
-.idea/
+# ── Environment & Secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Vector Store & Embeddings Cache ─────────────────────────────────────────
+vectorstore/
+*.faiss
+*.pkl
+*.index
+
+# ── Documents (user-supplied, not source code) ───────────────────────────────
+documents/
+!documents/.gitkeep
+
+# ── Database ─────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Streamlit ────────────────────────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── Pytest / Testing ─────────────────────────────────────────────────────────
+.pytest_cache/
+.cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# ── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDEs & Editors ───────────────────────────────────────────────────────────
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
 *.sublime-project
 *.sublime-workspace
 
-# OS files
-.DS_Store
-Thumbs.db
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Type Checking ────────────────────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+
+# ── Build / Packaging ────────────────────────────────────────────────────────
+*.spec

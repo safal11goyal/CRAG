@@ -1,12 +1,13 @@
-import os
 import time
-from typing import List, Tuple
+from pathlib import Path
+from typing import List, Tuple, Optional
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+import config
+from pipeline.pinecone_store import PineconeVectorStore, get_or_create_pinecone_index
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -28,10 +29,8 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     ),
     reraise=True,
 )
-def _embed_batch(vectorstore, batch: List[Document], embeddings: Embeddings):
-    """Embed a single batch of document chunks, retrying on rate-limit errors."""
-    if vectorstore is None:
-        return FAISS.from_documents(batch, embeddings)
+def _embed_batch(vectorstore: PineconeVectorStore, batch: List[Document], embeddings: Embeddings):
+    """Embed and upsert a single batch of document chunks into Pinecone, retrying on rate-limit errors."""
     vectorstore.add_documents(batch)
     return vectorstore
 
@@ -39,25 +38,27 @@ def _embed_batch(vectorstore, batch: List[Document], embeddings: Embeddings):
 def load_documents(documents_dir: str) -> List[Document]:
     """Load PDF, TXT, and DOCX files from the given directory."""
     documents: List[Document] = []
+    dir_path = Path(documents_dir)
 
-    if not os.path.exists(documents_dir):
-        os.makedirs(documents_dir, exist_ok=True)
+    if not dir_path.exists():
+        dir_path.mkdir(parents=True, exist_ok=True)
         return documents
 
-    for filename in sorted(os.listdir(documents_dir)):
-        filepath = os.path.join(documents_dir, filename)
-        if os.path.isdir(filepath):
+    # sorted() for reproducible ordering across platforms
+    for filepath in sorted(dir_path.iterdir()):
+        if not filepath.is_file():
             continue
 
-        ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+        ext = filepath.suffix.lower().lstrip(".")
+        filename = filepath.name
 
         if ext == "pdf":
             try:
-                loader = PyPDFLoader(filepath)
+                loader = PyPDFLoader(str(filepath))
                 docs = loader.load()
                 for doc in docs:
                     doc.metadata["source"] = filename
-                    # PyPDFLoader uses 0-based page index; normalize to 1-based to match prior behavior
+                    # PyPDFLoader uses 0-based page index; normalize to 1-based
                     if "page" in doc.metadata:
                         doc.metadata["page"] = doc.metadata["page"] + 1
                     if doc.page_content.strip():
@@ -67,7 +68,7 @@ def load_documents(documents_dir: str) -> List[Document]:
 
         elif ext == "txt":
             try:
-                loader = TextLoader(filepath, encoding="utf-8", autodetect_encoding=True)
+                loader = TextLoader(str(filepath), encoding="utf-8", autodetect_encoding=True)
                 docs = loader.load()
                 for doc in docs:
                     doc.metadata["source"] = filename
@@ -78,7 +79,7 @@ def load_documents(documents_dir: str) -> List[Document]:
 
         elif ext == "docx":
             try:
-                loader = Docx2txtLoader(filepath)
+                loader = Docx2txtLoader(str(filepath))
                 docs = loader.load()
                 for doc in docs:
                     doc.metadata["source"] = filename
@@ -103,45 +104,79 @@ def chunk_documents(
 
 
 def load_or_create_vectorstore(
-    documents_dir: str,
-    vectorstore_dir: str,
-    embeddings: Embeddings,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
+    documents_dir: str = config.DOCUMENTS_DIR,
+    vectorstore_dir: Optional[str] = None,
+    embeddings: Optional[Embeddings] = None,
+    index_name: Optional[str] = None,
+    api_key: Optional[str] = None,
+    chunk_size: int = config.CHUNK_SIZE,
+    chunk_overlap: int = config.CHUNK_OVERLAP,
     batch_size: int = 30,
-) -> Tuple[FAISS, List[Document]]:
-    """Load existing FAISS index or create and persist a new one in rate-limited batches with retries."""
+    force_reindex: bool = False,
+) -> Tuple[PineconeVectorStore, List[Document]]:
+    """
+    Connect to existing Pinecone vector index or create and populate a new index.
+    Also returns document chunks for the BM25 keyword index.
+    """
+    if embeddings is None:
+        raise ValueError("An Embeddings model instance must be provided.")
+
+    target_index_name = index_name or config.PINECONE_INDEX_NAME
+    target_api_key = api_key or config.PINECONE_API_KEY
+
     raw_docs = load_documents(documents_dir)
     chunks = chunk_documents(raw_docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
-    index_file = os.path.join(vectorstore_dir, "index.faiss")
-    if os.path.exists(index_file):
-        print(f"[INFO] Loading existing FAISS index from '{vectorstore_dir}'...", flush=True)
-        vectorstore = FAISS.load_local(
-            vectorstore_dir, embeddings, allow_dangerous_deserialization=True
+    if not target_api_key or target_api_key == "your_pinecone_api_key_here":
+        raise ValueError("PINECONE_API_KEY is not configured in .env. Please configure your Pinecone API key.")
+
+    print(f"[INFO] Initializing Pinecone index '{target_index_name}'...", flush=True)
+    probe_vector = embeddings.embed_query("dimension_probe")
+    dimension = len(probe_vector)
+
+    pinecone_index = get_or_create_pinecone_index(
+        api_key=target_api_key,
+        index_name=target_index_name,
+        dimension=dimension,
+        cloud=config.PINECONE_CLOUD,
+        region=config.PINECONE_REGION,
+    )
+
+    vectorstore = PineconeVectorStore(index=pinecone_index, embedding=embeddings)
+
+    # Check vector count in index
+    stats = pinecone_index.describe_index_stats()
+    total_vectors = (
+        getattr(stats, "total_vector_count", 0)
+        if hasattr(stats, "total_vector_count")
+        else (stats.get("total_vector_count", 0) if isinstance(stats, dict) else 0)
+    )
+
+    if total_vectors > 0 and not force_reindex:
+        print(
+            f"[INFO] Connected to existing Pinecone index '{target_index_name}' with {total_vectors} vectors.",
+            flush=True,
         )
         return vectorstore, chunks
 
-    print(f"[INFO] Creating new FAISS index from {len(chunks)} chunks in batches of {batch_size}...", flush=True)
+    print(
+        f"[INFO] Indexing {len(chunks)} chunks into Pinecone index '{target_index_name}' in batches of {batch_size}...",
+        flush=True,
+    )
     if not chunks:
         raise ValueError(
             f"No valid documents found in '{documents_dir}'. Please add PDF/TXT/DOCX files."
         )
 
-    os.makedirs(vectorstore_dir, exist_ok=True)
-    vectorstore = None
     total_batches = (len(chunks) + batch_size - 1) // batch_size
 
     for idx, i in enumerate(range(0, len(chunks), batch_size), start=1):
         batch = chunks[i : i + batch_size]
-        print(f"[INFO] Embedding batch {idx}/{total_batches} ({len(batch)} chunks)...", flush=True)
-        vectorstore = _embed_batch(vectorstore, batch, embeddings)
+        print(f"[INFO] Embedding and upserting batch {idx}/{total_batches} ({len(batch)} chunks)...", flush=True)
+        _embed_batch(vectorstore, batch, embeddings)
 
         # Courtesy pause between batches to stay under Cohere's 100k TPM trial limit
         time.sleep(3)
 
-    if vectorstore is not None:
-        vectorstore.save_local(vectorstore_dir)
-        print(f"[INFO] FAISS index successfully created and saved to '{vectorstore_dir}'.", flush=True)
-
+    print(f"[INFO] Pinecone index '{target_index_name}' successfully populated.", flush=True)
     return vectorstore, chunks

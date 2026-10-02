@@ -276,9 +276,9 @@ st.markdown(
 # CACHED PIPELINE INITIALIZATION
 # ============================================================================
 
-@st.cache_resource(show_spinner="⚡ Initializing RAG Knowledge Base & Embeddings...")
+@st.cache_resource(show_spinner="⚡ Initializing RAG Knowledge Base & Pinecone Embeddings...")
 def load_rag_app():
-    """Load Cohere embeddings, Gemini LLM, FAISS vectorstore, BM25, and compile LangGraph."""
+    """Load Cohere embeddings, Gemini LLM, Pinecone vectorstore, BM25, and compile LangGraph."""
     # Ensure database is connected
     database.init_db()
 
@@ -427,6 +427,7 @@ with st.sidebar:
 
     st.caption(f"**LLM:** `{config.GEMINI_MODEL}`")
     st.caption(f"**Embeddings:** `{config.EMBEDDING_MODEL}`")
+    st.caption(f"**Vector Store:** `Pinecone ({config.PINECONE_INDEX_NAME})`")
     st.caption(f"**Retrieval Top-K:** `{config.RETRIEVAL_K}`")
 
 

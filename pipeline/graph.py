@@ -2,11 +2,12 @@ import operator
 from typing import TypedDict, List, Annotated, Sequence, Optional
 from langgraph.graph import StateGraph, START, END
 from langchain_core.documents import Document
-from langchain_community.vectorstores import FAISS
+from langchain_core.vectorstores import VectorStore
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from pipeline.retrieval import BM25Index, hybrid_retrieval
-from pipeline.query import understand_query, improve_query, check_retrieval_needed, _extract_text
+from langchain_core.output_parsers import StrOutputParser
+from pipeline.query import understand_query, improve_query, check_retrieval_needed
 from pipeline.verification import verify_evidence
 from pipeline.generation import generate_answer, format_sources
 from pipeline.web_search import tavily_search
@@ -29,7 +30,7 @@ class RAGState(TypedDict, total=False):
 
 
 def build_rag_graph(
-    vectorstore: FAISS,
+    vectorstore: VectorStore,
     bm25_index: BM25Index,
     llm: ChatGoogleGenerativeAI,
     k: int = config.RETRIEVAL_K,
@@ -64,7 +65,7 @@ def build_rag_graph(
 
         try:
             response = llm.invoke(prompt_messages)
-            answer = _extract_text(response.content)
+            answer = StrOutputParser().invoke(response).strip()
         except Exception:
             answer = "Hello! How can I help you today? Feel free to ask me anything based on your documents."
 

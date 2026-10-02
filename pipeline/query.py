@@ -1,26 +1,21 @@
 from typing import List, Optional
+from langchain_core.output_parsers import StrOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 
+# Shared parser instance — StrOutputParser handles str, AIMessage, and
+# AIMessage with list-of-dict content blocks (Gemini provider format).
+_str_parser = StrOutputParser()
 
-def _extract_text(content) -> str:
-    """Extract plain text from LLM response content.
 
-    langchain-google-genai with Gemini can return content as a list of
-    content blocks (e.g. [{"type": "text", "text": "..."}]) rather than
-    a plain str. This helper normalizes both cases.
+def _parse_llm_response(response) -> str:
+    """Extract plain text from an LLM response object using StrOutputParser.
+
+    StrOutputParser correctly handles all response formats from the configured
+    LLM providers (Gemini string content and list-of-dict content blocks).
+    The result is stripped of leading/trailing whitespace.
     """
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        text_parts = []
-        for part in content:
-            if isinstance(part, dict) and "text" in part:
-                text_parts.append(part["text"])
-            elif isinstance(part, str):
-                text_parts.append(part)
-        return "".join(text_parts).strip()
-    return str(content).strip()
+    return _str_parser.invoke(response).strip()
 
 
 def understand_query(
@@ -59,7 +54,7 @@ def understand_query(
         HumanMessage(content=f"{history_context}Current Question: {question}"),
     ]
     response = llm.invoke(messages)
-    query = _extract_text(response.content).strip('"').strip("'")
+    query = _parse_llm_response(response).strip('"').strip("'")
     return query if query else question
 
 
@@ -99,7 +94,7 @@ def improve_query(
         ),
     ]
     response = llm.invoke(messages)
-    refined = _extract_text(response.content).strip('"').strip("'")
+    refined = _parse_llm_response(response).strip('"').strip("'")
     return refined if refined else previous_query
 
 
@@ -169,7 +164,7 @@ def check_retrieval_needed(
     ]
     try:
         response = llm.invoke(messages)
-        decision = _extract_text(response.content).upper().strip()
+        decision = _parse_llm_response(response).upper()
         return "NO" not in decision
     except Exception:
         # Safe fallback: if router encounters an error, proceed with retrieval

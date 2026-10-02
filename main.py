@@ -33,7 +33,7 @@ def main():
     print(f"LLM Model:        {config.GEMINI_MODEL}")
     print(f"Embedding Model:  {config.EMBEDDING_MODEL} (Cohere)")
     print(f"Documents Folder: {config.DOCUMENTS_DIR}")
-    print(f"Vector Store:     {config.VECTORSTORE_DIR}")
+    print(f"Vector Store:     Pinecone ({config.PINECONE_INDEX_NAME})")
     print(f"PostgreSQL DB:    {'Connected' if db_connected else 'Offline / Disabled'}")
     print(f"Session ID:       {session_id}")
     print("=" * 60)
