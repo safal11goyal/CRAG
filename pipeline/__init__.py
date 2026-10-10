@@ -1,7 +1,9 @@
 from pipeline.ingestion import (
     load_documents,
+    load_single_document,
     chunk_documents,
     load_or_create_vectorstore,
+    ingest_uploaded_file,
 )
 from pipeline.retrieval import BM25Index, hybrid_retrieval
 from pipeline.query import understand_query, improve_query, check_retrieval_needed
@@ -12,8 +14,10 @@ from pipeline.graph import build_rag_graph, RAGState
 
 __all__ = [
     "load_documents",
+    "load_single_document",
     "chunk_documents",
     "load_or_create_vectorstore",
+    "ingest_uploaded_file",
     "BM25Index",
     "hybrid_retrieval",
     "understand_query",

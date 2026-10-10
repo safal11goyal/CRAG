@@ -16,7 +16,7 @@ def main():
 
     if not os.path.exists(config.DOCUMENTS_DIR) or not os.listdir(config.DOCUMENTS_DIR):
         print(f"[ERROR] No documents found in '{config.DOCUMENTS_DIR}' directory.")
-        print("Please place PDF, TXT, or DOCX files into the 'documents/' folder.")
+        print("Please place PDF, PPTX, TXT, or DOCX files into the 'documents/' folder.")
         sys.exit(1)
 
     # Initialize PostgreSQL Database

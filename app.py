@@ -17,6 +17,7 @@ logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ER
 
 import time
 import uuid
+from pathlib import Path
 import streamlit as st
 
 import config
@@ -25,7 +26,7 @@ from langchain_cohere import CohereEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from pipeline.graph import build_rag_graph
-from pipeline.ingestion import load_or_create_vectorstore
+from pipeline.ingestion import load_or_create_vectorstore, ingest_uploaded_file
 from pipeline.retrieval import BM25Index
 
 # ============================================================================
@@ -266,6 +267,43 @@ st.markdown(
         color: #cbd5e1 !important;
         font-weight: 600 !important;
     }
+
+    /* File Uploader Custom Styling */
+    [data-testid="stFileUploader"] {
+        background-color: #111827 !important;
+        border: 1px dashed #3b82f6 !important;
+        border-radius: 10px !important;
+        padding: 0.6rem !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+    [data-testid="stFileUploader"]:hover {
+        border-color: #60a5fa !important;
+        background-color: #172033 !important;
+    }
+    [data-testid="stFileUploader"] section {
+        padding: 0.4rem !important;
+    }
+    [data-testid="stFileUploader"] small {
+        color: #94a3b8 !important;
+    }
+
+    /* Document Library Chips */
+    .doc-pill {
+        background-color: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 6px 10px;
+        margin-bottom: 6px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.85rem;
+        transition: all 0.15s ease-in-out;
+    }
+    .doc-pill:hover {
+        border-color: #3b82f6;
+        background-color: #243048;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -384,6 +422,84 @@ with st.sidebar:
 
     st.markdown("---")
 
+    # ─── Document Knowledge Base & Upload Section ─────────────────────────────
+    st.markdown("#### 📁 Document Library")
+    with st.expander("📤 Upload PDF or Presentation", expanded=True):
+        st.caption("Upload files to index into Pinecone & BM25:")
+        uploaded_files = st.file_uploader(
+            "Upload files",
+            type=["pdf", "pptx", "ppt", "docx", "txt"],
+            accept_multiple_files=True,
+            key="rag_uploader",
+            label_visibility="collapsed",
+            help="Supported formats: PDF, PPTX (PowerPoint), PPT, DOCX, TXT",
+        )
+
+        if uploaded_files:
+            if st.button("🚀 Upload & Index Document(s)", type="primary", use_container_width=True, key="ingest_btn"):
+                with st.status("Indexing documents into Pinecone & BM25...", expanded=True) as status_box:
+                    total_success = 0
+                    total_chunks_added = 0
+                    for up_file in uploaded_files:
+                        status_box.write(f"📄 Processing **{up_file.name}**...")
+                        try:
+                            num_docs, num_chunks = ingest_uploaded_file(
+                                file_bytes=up_file.getvalue(),
+                                filename=up_file.name,
+                                documents_dir=config.DOCUMENTS_DIR,
+                                status_callback=lambda msg: status_box.write(f"&nbsp;&nbsp;↳ {msg}"),
+                            )
+                            total_success += 1
+                            total_chunks_added += num_chunks
+                            status_box.write(
+                                f"✅ **{up_file.name}**: {num_docs} pages/slides, {num_chunks} chunks indexed!"
+                            )
+                        except Exception as e:
+                            status_box.error(f"❌ Failed to ingest {up_file.name}: {e}")
+
+                    if total_success > 0:
+                        status_box.update(
+                            label=f"🎉 Successfully indexed {total_success} file(s) ({total_chunks_added} chunks)!",
+                            state="complete",
+                            expanded=False,
+                        )
+                        st.cache_resource.clear()
+                        st.success(f"Added {total_success} file(s) to knowledge base! Updating...")
+                        time.sleep(1.2)
+                        st.rerun()
+
+        # Display list of documents currently in knowledge base
+        doc_dir = Path(config.DOCUMENTS_DIR)
+        doc_files = []
+        if doc_dir.exists():
+            doc_files = [
+                f for f in sorted(doc_dir.iterdir())
+                if f.is_file() and not f.name.startswith(".") and f.name != ".gitkeep"
+            ]
+
+        st.markdown(f"**Indexed Files ({len(doc_files)}):**")
+        if not doc_files:
+            st.caption("No documents in library. Upload files above.")
+        else:
+            for f in doc_files:
+                size_mb = f.stat().st_size / (1024 * 1024)
+                size_str = f"{size_mb:.1f} MB" if size_mb >= 0.1 else f"{f.stat().st_size / 1024:.1f} KB"
+                ext = f.suffix.lower()
+                icon = "📊" if ext in (".pptx", ".ppt") else ("📄" if ext == ".pdf" else ("📝" if ext == ".txt" else "📘"))
+                st.markdown(
+                    f"""<div class="doc-pill">
+                        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px;" title="{f.name}">{icon} {f.name}</span>
+                        <span style="color: #94a3b8; font-size: 0.72rem; margin-left: 6px;">{size_str}</span>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+
+        if st.button("🔄 Refresh Index", use_container_width=True, key="refresh_kb_btn", help="Reload vector store and BM25 index from disk"):
+            st.cache_resource.clear()
+            st.rerun()
+
+    st.markdown("---")
+
     # Previous Conversations List from PostgreSQL
     st.markdown("#### 💬 Previous Conversations")
 
@@ -465,7 +581,8 @@ for message in st.session_state.messages:
 
                 st.markdown("**Cited Sources:**")
                 for src in sources:
-                    st.markdown(f"- 📄 `{src}`")
+                    icon = "📊" if any(src.lower().endswith(ext) for ext in (".pptx", ".ppt")) else "📄"
+                    st.markdown(f"- {icon} `{src}`")
 
 
 # Chat Input
@@ -555,7 +672,8 @@ if user_query:
 
                 st.markdown("**Cited Sources:**")
                 for src in sources:
-                    st.markdown(f"- 📄 `{src}`")
+                    icon = "📊" if any(src.lower().endswith(ext) for ext in (".pptx", ".ppt")) else "📄"
+                    st.markdown(f"- {icon} `{src}`")
 
         # Save turn to PostgreSQL
         database.save_conversation_turn(
