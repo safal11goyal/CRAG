@@ -1,6 +1,6 @@
 import time
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any, Callable
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter

@@ -110,14 +110,14 @@ def check_retrieval_needed(
     Returns:
         True if retrieval is required, False if it can be answered directly.
     """
-    cleaned = question.strip().lower().rstrip("!?.")
+    cleaned = question.strip().lower().rstrip("!?.,")
 
     # Fast path for common conversational greetings and pleasantries (0ms latency)
     common_greetings = {
         "hi", "hello", "hey", "hey there", "greetings", "good morning",
         "good afternoon", "good evening", "how are you", "how are you doing",
         "how's it going", "who are you", "what can you do", "what are you",
-        "help", "thanks", "thank you", "bye", "goodbye", "see you", "ok",
+        "help", "thanks", "thank you", "thank you very much", "bye", "goodbye", "see you", "ok",
         "okay", "cool", "nice", "great", "welcome",
     }
     if cleaned in common_greetings:

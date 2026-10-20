@@ -35,6 +35,7 @@ def main():
     print(f"Documents Folder: {config.DOCUMENTS_DIR}")
     print(f"Vector Store:     Pinecone ({config.PINECONE_INDEX_NAME})")
     print(f"PostgreSQL DB:    {'Connected' if db_connected else 'Offline / Disabled'}")
+    print(f"LangSmith:        {'Enabled (' + config.LANGSMITH_PROJECT + ')' if config.LANGSMITH_TRACING and config.LANGSMITH_API_KEY else 'Disabled'}")
     print(f"Session ID:       {session_id}")
     print("=" * 60)
 
@@ -144,7 +145,12 @@ def main():
         }
 
         try:
-            final_state = rag_app.invoke(initial_state)
+            run_config = {
+                "run_name": f"CLI: {user_input[:35]}",
+                "metadata": {"session_id": session_id},
+                "tags": ["cli", "adaptive-rag"],
+            }
+            final_state = rag_app.invoke(initial_state, config=run_config)
 
             answer = final_state.get("answer", "No answer could be generated.")
             confidence = final_state.get("confidence", 0.0)

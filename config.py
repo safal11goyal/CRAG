@@ -1,7 +1,9 @@
+import os
 import sys
 import logging
 import warnings
 from pathlib import Path
+from dotenv import load_dotenv
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 from sqlalchemy.engine import make_url
@@ -19,6 +21,7 @@ except Exception:
     pass
 
 _ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=_ENV_PATH)
 
 
 class _Settings(BaseSettings):
@@ -32,6 +35,12 @@ class _Settings(BaseSettings):
     COHERE_API_KEY: str = ""
     TAVILY_API_KEY: str = ""
     PINECONE_API_KEY: str = ""
+
+    # LangSmith Tracing
+    LANGSMITH_TRACING: bool = False
+    LANGSMITH_ENDPOINT: str = "https://api.smith.langchain.com"
+    LANGSMITH_API_KEY: str = ""
+    LANGSMITH_PROJECT: str = "RAG"
 
     # Model names
     GEMINI_MODEL: str = "gemini-3.1-flash-lite"
@@ -70,6 +79,20 @@ class _Settings(BaseSettings):
 # Singleton settings object
 _settings = _Settings()
 
+# Ensure LangSmith / LangChain tracing environment variables are exported to os.environ
+if _settings.LANGSMITH_TRACING:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGSMITH_TRACING"] = "true"
+    if _settings.LANGSMITH_API_KEY:
+        os.environ["LANGCHAIN_API_KEY"] = _settings.LANGSMITH_API_KEY
+        os.environ["LANGSMITH_API_KEY"] = _settings.LANGSMITH_API_KEY
+    if _settings.LANGSMITH_PROJECT:
+        os.environ["LANGCHAIN_PROJECT"] = _settings.LANGSMITH_PROJECT
+        os.environ["LANGSMITH_PROJECT"] = _settings.LANGSMITH_PROJECT
+    if _settings.LANGSMITH_ENDPOINT:
+        os.environ["LANGCHAIN_ENDPOINT"] = _settings.LANGSMITH_ENDPOINT
+        os.environ["LANGSMITH_ENDPOINT"] = _settings.LANGSMITH_ENDPOINT
+
 # ─── Module-level compatibility constants ──────────────────────────────────────
 # All callers (app.py, main.py, database.py, pipeline/*) import these names
 # directly, so we expose them as top-level module attributes exactly as before.
@@ -77,6 +100,11 @@ GOOGLE_API_KEY: str = _settings.GOOGLE_API_KEY
 COHERE_API_KEY: str = _settings.COHERE_API_KEY
 TAVILY_API_KEY: str = _settings.TAVILY_API_KEY
 PINECONE_API_KEY: str = _settings.PINECONE_API_KEY
+
+LANGSMITH_TRACING: bool = _settings.LANGSMITH_TRACING
+LANGSMITH_ENDPOINT: str = _settings.LANGSMITH_ENDPOINT
+LANGSMITH_API_KEY: str = _settings.LANGSMITH_API_KEY
+LANGSMITH_PROJECT: str = _settings.LANGSMITH_PROJECT
 
 GEMINI_MODEL: str = _settings.GEMINI_MODEL
 EMBEDDING_MODEL: str = _settings.EMBEDDING_MODEL
@@ -145,6 +173,11 @@ def validate_config() -> None:
 
     if not TAVILY_API_KEY or TAVILY_API_KEY == "your_tavily_api_key_here":
         print("[WARN] TAVILY_API_KEY is not set. Web search fallback will be disabled.")
+
+    if LANGSMITH_TRACING and LANGSMITH_API_KEY:
+        print(f"[INFO] LangSmith Tracing is ENABLED (Project: '{LANGSMITH_PROJECT}')")
+    elif LANGSMITH_TRACING and not LANGSMITH_API_KEY:
+        print("[WARN] LANGSMITH_TRACING is true but LANGSMITH_API_KEY is not set.")
 
     db_url = get_database_url()
     if not db_url:

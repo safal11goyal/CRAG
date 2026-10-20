@@ -541,6 +541,11 @@ with st.sidebar:
     else:
         st.markdown('Database: <span class="badge-offline">○ Offline Mode</span>', unsafe_allow_html=True)
 
+    if config.LANGSMITH_TRACING and config.LANGSMITH_API_KEY:
+        st.markdown(f'LangSmith: <span class="badge-connected">● Active ({config.LANGSMITH_PROJECT})</span>', unsafe_allow_html=True)
+    else:
+        st.markdown('LangSmith: <span class="badge-offline">○ Disabled</span>', unsafe_allow_html=True)
+
     st.caption(f"**LLM:** `{config.GEMINI_MODEL}`")
     st.caption(f"**Embeddings:** `{config.EMBEDDING_MODEL}`")
     st.caption(f"**Vector Store:** `Pinecone ({config.PINECONE_INDEX_NAME})`")
@@ -630,7 +635,15 @@ if user_query:
         }
 
         try:
-            final_state = rag_pipeline.invoke(initial_state)
+            run_config = {
+                "run_name": f"Chat: {user_query[:35]}",
+                "metadata": {
+                    "session_id": st.session_state.session_id,
+                    "session_title": st.session_state.session_title,
+                },
+                "tags": ["streamlit", "adaptive-rag"],
+            }
+            final_state = rag_pipeline.invoke(initial_state, config=run_config)
         except Exception as e:
             message_placeholder.empty()
             st.error(f"⚠️ A network connection issue occurred while communicating with the AI service: {e}. Please try sending your message again.")
